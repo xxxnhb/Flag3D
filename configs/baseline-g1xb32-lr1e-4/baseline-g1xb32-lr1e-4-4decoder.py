@@ -2,12 +2,12 @@
 train_batch_size = 32
 test_batch_size = 8
 num_workers = 8
-max_epochs = 50
+max_epochs = 30
 
 # Decoder VIT
 dim = 256
 num_heads = 8
-num_layers = 3
+num_layers = 4
 in_channel = 256
 out_channel = 1
 

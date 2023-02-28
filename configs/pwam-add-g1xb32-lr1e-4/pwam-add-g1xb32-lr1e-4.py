@@ -4,14 +4,32 @@ test_batch_size = 8
 num_workers = 8
 max_epochs = 50
 
+# language model
+bert_type = "roberta-base"
+language_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_language.pkl'
+cls = False
+
+# co attention
+feat_size = 256
+co_attention_layer_nhead=8
+
+# PWAM
+pwam_dim = 8
+v_in_channels = 8
+projector = False
+l_in_channels = 768
+
 # Decoder VIT
-dim = 256
+decoder_dim = 256
 num_heads = 8
 num_layers = 3
+
+# MLP regression
 in_channel = 256
 out_channel = 1
 
 # learning rate
+lr = 1e-4
 weight_loss_aqa = 1
 
 # data_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_ntu_t.pkl'
@@ -19,10 +37,20 @@ data_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_ntu_random.pkl'  # random
 voter_number = 10
 
 model = dict(
-    type='BaseModel',
+    type='PWAMAddModel',
+    pwam=dict(
+        type='PWAM',
+        dim=pwam_dim,
+        v_in_channels=v_in_channels,
+        l_in_channels=l_in_channels,
+        key_channels=v_in_channels,
+        value_channels=v_in_channels,
+        num_heads=1,
+        dropout=0.0
+    ),
     decoder=dict(
         type='Decoder',
-        dim=dim,
+        dim=decoder_dim,
         num_heads=num_heads,
         num_layers=num_layers
     ),
@@ -30,16 +58,22 @@ model = dict(
         type='MLP',
         in_channel=in_channel,
         out_channel=out_channel),
+    feat_size=feat_size,
+    cls=cls,
+    projector=projector,
+    dim=pwam_dim,
+    bert_type=bert_type,
     weight_loss_aqa=weight_loss_aqa)
 
 model_wrapper_cfg = dict(
     type='BaseDistributedDataParallel',
     broadcast_buffers=False,
-    find_unused_parameters=False)
+    find_unused_parameters=True)
 
 dataset_args = dict(
     path=data_path,
-    voter_number=voter_number)
+    voter_number=voter_number,
+    language_path=language_path)
 
 train_dataloader = dict(
     batch_size=train_batch_size,
@@ -47,7 +81,7 @@ train_dataloader = dict(
     sampler=dict(type='DefaultSampler', shuffle=True),
     drop_last=False,
     dataset=dict(
-        type='Flag3D',
+        type='LanFlag3D',
         phase='train',
         **dataset_args))
 
@@ -56,7 +90,7 @@ val_dataloader = dict(
     num_workers=num_workers,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type='Flag3D',
+        type='LanFlag3D',
         phase='test',
         **dataset_args))
 
@@ -72,7 +106,7 @@ test_cfg = dict(type='TestLoop')
 
 optim_wrapper = dict(
     type='OptimWrapper',
-    optimizer=dict(type='Adam', lr=1e-4),
+    optimizer=dict(type='Adam', lr=lr),
     accumulative_counts=1,
     paramwise_cfg=dict(custom_keys={'cond_net.scene_model': dict(lr_mult=0.1)}))
 

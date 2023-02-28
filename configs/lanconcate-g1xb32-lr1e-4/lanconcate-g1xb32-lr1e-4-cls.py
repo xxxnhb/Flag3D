@@ -2,16 +2,28 @@
 train_batch_size = 32
 test_batch_size = 8
 num_workers = 8
-max_epochs = 50
+max_epochs = 30
+
+# language model
+bert_type = "roberta-base"
+language_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_language.pkl'
+cls = True  # only use cls token
+
+# co attention
+feat_size = 256
+co_attention_layer_nhead=8
 
 # Decoder VIT
 dim = 256
 num_heads = 8
 num_layers = 3
+
+# MLP regression
 in_channel = 256
 out_channel = 1
 
 # learning rate
+lr = 1e-4
 weight_loss_aqa = 1
 
 # data_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_ntu_t.pkl'
@@ -19,7 +31,7 @@ data_path = '/mnt/disk_1/jinpeng/rank/data/FLAG/flag3d_ntu_random.pkl'  # random
 voter_number = 10
 
 model = dict(
-    type='BaseModel',
+    type='LanConcateModel',
     decoder=dict(
         type='Decoder',
         dim=dim,
@@ -30,6 +42,9 @@ model = dict(
         type='MLP',
         in_channel=in_channel,
         out_channel=out_channel),
+    cls=cls,
+    feat_size=feat_size,
+    bert_type=bert_type,
     weight_loss_aqa=weight_loss_aqa)
 
 model_wrapper_cfg = dict(
@@ -39,7 +54,8 @@ model_wrapper_cfg = dict(
 
 dataset_args = dict(
     path=data_path,
-    voter_number=voter_number)
+    voter_number=voter_number,
+    language_path=language_path)
 
 train_dataloader = dict(
     batch_size=train_batch_size,
@@ -47,7 +63,7 @@ train_dataloader = dict(
     sampler=dict(type='DefaultSampler', shuffle=True),
     drop_last=False,
     dataset=dict(
-        type='Flag3D',
+        type='LanFlag3D',
         phase='train',
         **dataset_args))
 
@@ -56,7 +72,7 @@ val_dataloader = dict(
     num_workers=num_workers,
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
-        type='Flag3D',
+        type='LanFlag3D',
         phase='test',
         **dataset_args))
 
@@ -72,7 +88,7 @@ test_cfg = dict(type='TestLoop')
 
 optim_wrapper = dict(
     type='OptimWrapper',
-    optimizer=dict(type='Adam', lr=1e-4),
+    optimizer=dict(type='Adam', lr=lr),
     accumulative_counts=1,
     paramwise_cfg=dict(custom_keys={'cond_net.scene_model': dict(lr_mult=0.1)}))
 

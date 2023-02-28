@@ -1,11 +1,5 @@
-import copy
-import random
-from typing import Tuple, Callable
-import smplx
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from collections import OrderedDict
 from pytorch_pretrained_bert.modeling import BertModel
 import mmengine.dist as dist
@@ -14,21 +8,6 @@ from mmengine.registry import MODELS
 from mmengine.runner.checkpoint import _load_checkpoint
 from flag3d.dataset.utils import cast_data
 from flag3d.model.blocks import DecoderBlock
-
-
-# from flag3d.dataset import cast_data
-# from flag3d.model import (PointTransformerEnc, ResBlock,
-#                        TransformerEncoderLayer, PositionalEncoding, NearestEmbed)
-# from flag3d.utils import GeometryTransformer, marker_indic, smplx_signed_distance
-
-
-def parse_losses(losses):
-    loss = losses['loss']
-    for loss_name, loss_value in losses.items():
-        loss_value = loss_value.data.clone()
-        dist.all_reduce(loss_value, 'mean')
-        losses[loss_name] = loss_value.item()
-    return loss, losses
 
 
 @MODELS.register_module()
@@ -43,7 +22,22 @@ class Decoder(nn.Module):
     def forward(self, q, v):
         for _layer in self.model:
             q = _layer(q, v)
-        return q
+        return q            # (B, 8, 256)
+
+
+@MODELS.register_module()
+class HierachyDecoder(nn.Module):
+    def __init__(self, dim, num_heads, num_layers):
+        super(HierachyDecoder, self).__init__()
+        model_list = []
+        for i in range(num_layers):
+            model_list.append(DecoderBlock(dim, num_heads))
+        self.model = nn.ModuleList(model_list)
+
+    def forward(self, q, v, pwam):
+        for _layer in self.model:
+            q = torch.cat((_layer(q, v), pwam), dim=1)
+        return q            # (B, 8, 256)
 
 
 @MODELS.register_module()

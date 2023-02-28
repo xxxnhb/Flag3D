@@ -38,7 +38,7 @@ class ErrorMetric(BaseMetric):
         # L2 = np.power(pred_scores - true_scores, 2).sum() / true_scores.shape[0]
         RL2 = np.power((pred_scores - true_scores) / (max(true_scores) - min(true_scores)), 2).sum() / \
               true_scores.shape[0]
-        metrics = {'correlation': rho,
+        metrics = {'correlation': -rho,
                    'RL2': RL2
                    }
         return metrics

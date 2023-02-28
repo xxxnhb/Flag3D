@@ -8,6 +8,8 @@ import numpy as np
 import logging
 import torch.nn.functional as F
 import sys
+from torch import Tensor
+from typing import Optional
 
 
 class Mlp(nn.Module):
@@ -704,3 +706,194 @@ def cal_tiou(tIoU_results, tiou_thresholds):
 
     tIoU_correct_per_thr = tIoU_correct.sum(0)
     return tIoU_correct_per_thr
+
+
+# co-attention
+class TransformerEncoderLayer(nn.Module):
+    r"""TransformerEncoderLayer is made up of self-attn and feedforward network.
+    This standard encoder layer is based on the paper "Attention Is All You Need".
+    Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez,
+    Lukasz Kaiser, and Illia Polosukhin. 2017. Attention is all you need. In Advances in
+    Neural Information Processing Systems, pages 6000-6010. Users may modify or implement
+    in a different way during application.
+
+    Args:
+        d_model: the number of expected features in the input (required).
+        nhead: the number of heads in the multiheadattention models (required).
+        dim_feedforward: the dimension of the feedforward network model (default=2048).
+        dropout: the dropout value (default=0.1).
+        activation: the activation function of the intermediate layer, can be a string
+            ("relu" or "gelu") or a unary callable. Default: relu
+        layer_norm_eps: the eps value in layer normalization components (default=1e-5).
+        batch_first: If ``True``, then the input and output tensors are provided
+            as (batch, seq, feature). Default: ``False``.
+
+    Examples::
+        >>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8)
+        >>> src = torch.rand(10, 32, 512)
+        >>> out = encoder_layer(src)
+
+    Alternatively, when ``batch_first`` is ``True``:
+        >>> encoder_layer = nn.TransformerEncoderLayer(d_model=512, nhead=8, batch_first=True)
+        >>> src = torch.rand(32, 10, 512)
+        >>> out = encoder_layer(src)
+    """
+    __constants__ = ['batch_first', 'norm_first']
+
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1, activation=F.relu,
+                 layer_norm_eps=1e-5, batch_first=False,
+                 device=None, dtype=None) -> None:
+        factory_kwargs = {'device': device, 'dtype': dtype}
+        super(TransformerEncoderLayer, self).__init__()
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=batch_first,
+                                               **factory_kwargs)
+        # Implementation of Feedforward model
+        self.linear1 = nn.Linear(d_model, dim_feedforward, **factory_kwargs)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model, **factory_kwargs)
+
+        self.norm_first = False
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+        self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps, **factory_kwargs)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+        # Legacy string support for activation function.
+        if isinstance(activation, str):
+            self.activation = _get_activation_fn(activation)
+        else:
+            self.activation = activation
+
+    def __setstate__(self, state):
+        if 'activation' not in state:
+            state['activation'] = F.relu
+        super(TransformerEncoderLayer, self).__setstate__(state)
+
+    def forward(self, src: Tensor, src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None) -> Tensor:
+        r"""Pass the input through the encoder layer.
+
+        Args:
+            src: the sequence to the encoder layer (required).
+            src_mask: the mask for the src sequence (optional).
+            src_key_padding_mask: the mask for the src keys per batch (optional).
+
+        Shape:
+            see the docs in Transformer class.
+        """
+
+        # see Fig. 1 of https://arxiv.org/pdf/2002.04745v1.pdf
+
+        x = src
+        if self.norm_first:
+            x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+            x = x + self._ff_block(self.norm2(x))
+        else:
+            atten_output, atten_score = self._sa_block(x, src_mask, src_key_padding_mask)
+            x = self.norm1(x + atten_output)
+            x = self.norm2(x + self._ff_block(x))
+
+        return x, atten_score
+
+    # self-attention block
+    def _sa_block(self, x: Tensor,
+                  attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor]) -> Tensor:
+        # x = self.self_attn(x, x, x,
+        #                    attn_mask=attn_mask,
+        #                    key_padding_mask=key_padding_mask,
+        #                    need_weights=False)[0]
+        x = self.self_attn(x, x, x,
+                           attn_mask=attn_mask,
+                           key_padding_mask=key_padding_mask,
+                           need_weights=True)
+        # return self.dropout1(x)
+        return self.dropout1(x[0]), x[1]
+
+    # feed forward block
+    def _ff_block(self, x: Tensor) -> Tensor:
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        return self.dropout2(x)
+
+
+def _get_activation_fn(activation):
+    if activation == "relu":
+        return F.relu
+    elif activation == "gelu":
+        return F.gelu
+
+    raise RuntimeError("activation should be relu/gelu, not {}".format(activation))
+
+
+class SpatialImageLanguageAttention(nn.Module):
+    def __init__(self, v_in_channels, l_in_channels, key_channels, value_channels, out_channels=None, num_heads=1):
+        super(SpatialImageLanguageAttention, self).__init__()
+        # x shape: (B, H*W, v_in_channels)
+        # l input shape: (B, l_in_channels, N_l)
+        # l_mask shape: (B, N_l, 1)
+        self.v_in_channels = v_in_channels
+        self.l_in_channels = l_in_channels
+        self.out_channels = out_channels
+        self.key_channels = key_channels
+        self.value_channels = value_channels
+        self.num_heads = num_heads
+        if out_channels is None:
+            self.out_channels = self.value_channels
+
+        # Keys: language features: (B, l_in_channels, #words)
+        # avoid any form of spatial normalization because a sentence contains many padding 0s
+        self.f_key = nn.Sequential(
+            nn.Conv1d(self.l_in_channels, self.key_channels, kernel_size=1, stride=1),
+        )
+
+        # Queries: visual features: (B, H*W, v_in_channels)
+        self.f_query = nn.Sequential(
+            nn.Conv1d(self.v_in_channels, self.key_channels, kernel_size=1, stride=1),
+            nn.InstanceNorm1d(self.key_channels),
+        )
+
+        # Values: language features: (B, l_in_channels, #words)
+        self.f_value = nn.Sequential(
+            nn.Conv1d(self.l_in_channels, self.value_channels, kernel_size=1, stride=1),
+        )
+
+        # Out projection
+        self.W = nn.Sequential(
+            nn.Conv1d(self.value_channels, self.out_channels, kernel_size=1, stride=1),
+            nn.InstanceNorm1d(self.out_channels),
+        )
+
+    def forward(self, x, l, l_mask):
+        # x shape: (B, H*W, v_in_channels)
+        # l input shape: (B, l_in_channels, N_l)
+        # l_mask shape: (B, N_l, 1)
+        B, HW = x.size(0), x.size(1)
+        x = x.permute(0, 2, 1)  # (B, key_channels, H*W)
+        l_mask = l_mask.permute(0, 2, 1)  # (B, N_l, 1) -> (B, 1, N_l)
+
+        query = self.f_query(x)  # (B, key_channels, H*W) if Conv1D
+        query = query.permute(0, 2, 1)  # (B, H*W, key_channels)
+        key = self.f_key(l)  # (B, key_channels, N_l)
+        value = self.f_value(l)  # (B, self.value_channels, N_l)
+        key = key * l_mask  # (B, key_channels, N_l)
+        value = value * l_mask  # (B, self.value_channels, N_l)
+        n_l = value.size(-1)
+        query = query.reshape(B, HW, self.num_heads, self.key_channels // self.num_heads).permute(0, 2, 1, 3)
+        # (b, num_heads, H*W, self.key_channels//self.num_heads)
+        key = key.reshape(B, self.num_heads, self.key_channels // self.num_heads, n_l)
+        # (b, num_heads, self.key_channels//self.num_heads, n_l)
+        value = value.reshape(B, self.num_heads, self.value_channels // self.num_heads, n_l)
+        # # (b, num_heads, self.value_channels//self.num_heads, n_l)
+        l_mask = l_mask.unsqueeze(1)  # (b, 1, 1, n_l)
+
+        sim_map = torch.matmul(query, key)  # (B, self.num_heads, H*W, N_l)
+        sim_map = (self.key_channels ** -.5) * sim_map  # scaled dot product
+
+        sim_map = sim_map + (1e4 * l_mask - 1e4)  # assign a very small number to padding positions
+        sim_map = F.softmax(sim_map, dim=-1)  # (B, num_heads, h*w, N_l)
+        out = torch.matmul(sim_map, value.permute(0, 1, 3, 2))  # (B, num_heads, H*W, self.value_channels//num_heads)
+        out = out.permute(0, 2, 1, 3).contiguous().reshape(B, HW, self.value_channels)  # (B, H*W, value_channels)
+        out = out.permute(0, 2, 1)  # (B, value_channels, HW)
+        out = self.W(out)  # (B, value_channels, HW)
+        out = out.permute(0, 2, 1)  # (B, HW, value_channels)
+
+        return out

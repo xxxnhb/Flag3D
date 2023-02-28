@@ -17,6 +17,9 @@ def cast_data(data):
     elif isinstance(data, np.ndarray):
         data = torch.FloatTensor(np.array(data))
         return data.to(get_device())
+    elif isinstance(data, np.int64):
+        data = torch.FloatTensor(np.array(float(data)))
+        return data.to(get_device())
     elif isinstance(data, torch.Tensor):
         return data.to(get_device())
     else:

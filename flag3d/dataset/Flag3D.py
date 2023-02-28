@@ -67,3 +67,67 @@ class Flag3D(Dataset):
     #                     self.data[self.subset][i]['score1'] + self.data[self.subset][i]['score2'] -
     #                     self.data[self.subset][j]['score1'] - self.data[self.subset][j]['score2']))
     #     return delta
+
+
+@DATASETS.register_module()
+class LanFlag3D(Dataset):
+    def __init__(self, phase, path, language_path, voter_number):
+        self.phase = phase
+        self.voter_number = voter_number
+        self.path = path
+        self.language_path = language_path
+        with open(path, 'rb') as f:
+            skeleton = pickle.load(f)
+            self.data = skeleton
+        with open(language_path, 'rb') as f:
+            feature = pickle.load(f)
+            self.input_ids, self.word_mask = feature['input_ids'], feature['attention_mask']
+
+    def __getitem__(self, index):
+        if self.phase == 'test':
+            # test phase
+            action = int(self.data['test'][index]['frame_dir'].split('A')[1].split('R')[0])-1
+            # language
+            input_ids, word_mask = self.input_ids[action], self.word_mask[action]
+            # skeleton feature
+            data_item = {'video': self.data['test'][index]['feat'],
+                         'final_score': self.data['test'][index]['score1'] + self.data['test'][index]['score2']}
+            target_obj = self.data['train'].copy()
+            random.shuffle(target_obj)
+            target_list = []
+            for item in target_obj:
+                if item['frame_dir'].split('A')[1].split('R')[0] == \
+                        self.data['test'][index]['frame_dir'].split('A')[1].split('R')[0] \
+                        and item['frame_dir'].split('P')[1].split('A')[0] != \
+                        self.data['test'][index]['frame_dir'].split('P')[1].split('A')[0]:
+                    target_item = {'video': item['feat'],
+                                   'final_score': item['score1'] + item['score2'],
+                                   }
+                    target_list.append(target_item)
+                if len(target_list) == self.voter_number:
+                    return data_item, target_list, input_ids, word_mask
+        elif self.phase == 'train':
+            # train phase
+            # test phase
+            action = int(self.data['train'][index]['frame_dir'].split('A')[1].split('R')[0])-1
+            # language
+            input_ids, word_mask = self.input_ids[action], self.word_mask[action]
+            # skeleton feature
+            data_item = {'video': self.data['train'][index]['feat'],
+                         'final_score': self.data['train'][index]['score1'] + self.data['train'][index]['score2']}
+            target_obj = self.data['train'].copy()
+            random.shuffle(target_obj)
+            target = {}
+            for item in target_obj:
+                if item['frame_dir'].split('A')[1].split('R')[0] == \
+                        self.data['train'][index]['frame_dir'].split('A')[1].split('R')[0]:
+                    target = {'video': item['feat'],
+                              'final_score': item['score1'] + item['score2'],
+                              }
+            return data_item, target, input_ids, word_mask
+
+    def __len__(self):
+        if self.phase == 'test':
+            return len(self.data['test'])
+        else:
+            return len(self.data['train'])

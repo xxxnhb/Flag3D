@@ -4,9 +4,9 @@ set -x
 
 CONFIG=$1
 GPUS=$2
+PORT=$3
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
-PORT=${PORT:-29600}
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 
 python -m torch.distributed.launch \
@@ -17,4 +17,4 @@ python -m torch.distributed.launch \
     --master_port=$PORT \
     train.py \
     $CONFIG \
-    --launcher pytorch ${@:3}
+    --launcher pytorch ${@:4}
